@@ -1,0 +1,100 @@
+// This file is part of www.nand2tetris.org
+// and the book "The Elements of Computing Systems"
+// by Nisan and Schocken, MIT Press.
+// File name: projects/05/CPU.hdl
+
+/**
+ * The Hack CPU (Central Processing unit), consisting of an ALU,
+ * two registers named A and D, and a program counter named PC.
+ * The CPU is designed to fetch and execute instructions written in 
+ * the Hack machine language. In particular, functions as follows:
+ * Executes the inputted instruction according to the Hack machine 
+ * language specification. The D and A in the language specification
+ * refer to CPU-resident registers, while M refers to the external
+ * memory location addressed by A, i.e. to Memory[A]. The inM input 
+ * holds the value of this location. If the current instruction needs 
+ * to write a value to M, the value is placed in ALUoutput, the address 
+ * of the target location is placed in the addressM output, and the 
+ * writeM control bit is asserted. (When writeM==0, any value may 
+ * appear in ALUoutput). The outM and writeM outputs are combinational: 
+ * they are affected instantaneously by the execution of the current 
+ * instruction. The addressM and pc outputs are clocked: although they 
+ * are affected by the execution of the current instruction, they commit 
+ * to their new values only in the next time step. If reset==1 then the 
+ * CPU jumps to address 0 (i.e. pc is set to 0 in next time step) rather 
+ * than to the address resulting from executing the current instruction. 
+ */
+
+CHIP CPU {
+
+    IN  inM[16],         // M value input  (M = contents of RAM[A])
+        instruction[16], // Instruction for execution
+        reset;           // Signals whether to re-start the current
+                         // program (reset==1) or continue executing
+                         // the current program (reset==0).
+
+    OUT outM[16],        // M value output
+        writeM,          // Write to M? 
+        addressM[15],    // Address in data memory (of M)
+        pc[15];          // address of next instruction
+
+    PARTS:
+
+    // check if A-instruction or C-instruction
+    // MSB=0 => A, MSB=1=>C
+    Not(in=instruction[15], out=Ainstruction);
+    Not(in=Ainstruction, out=Cinstruction);
+
+    // select A or M based on bit a (instruction[12])
+    Mux16(a=Aregister, b=inM, sel=instruction[12], out=input2);
+
+    // decode control bits: instruction[6..12] 
+    // call ALU
+    ALU(x=Dregister, y=input2, zx=instruction[11], nx=instruction[10], zy=instruction[9], ny=instruction[8], f=instruction[7], no=instruction[6], out=ALUoutput, zr=IsZero, ng=IsNeg);
+
+    // update output
+    Or16(a=ALUoutput, b=false, out=outM);
+
+    // decode destination: instruction[3]=>M, instruction[4]=>D, instruction[5]=>A
+    And(a=instruction[3], b=Cinstruction, out=writeM);
+    And(a=instruction[4], b=Cinstruction, out=loadD);
+    And(a=instruction[5], b=Cinstruction, out=loadAfromALU);
+    Or(a=loadAfromALU, b=Ainstruction, out=loadA);
+
+    // redirect ALU output to D register
+    DRegister(in=ALUoutput, load=loadD, out=Dregister);
+
+    // write address to addressM
+    Mov15(in=Aregister, out=addressM);
+
+    // select address for A register based on instruction type
+    Mux16(a=ALUoutput, b=instruction, sel=Ainstruction, out=Avalue);
+    ARegister(in=Avalue, load=loadA, out=Aregister);
+
+    // decode jump: instruction[0..2]
+    DMux8Way(in=true, sel=instruction[0..2], a=nojump, b=jgt, c=jeq, d=jge, e=jlt, f=jne, g=jle, h=jmp);
+    Not(in=IsNeg, out=IsNotNeg);
+    Not(in=IsZero, out=IsNonZero);
+    And(a=IsNotNeg, b=IsNonZero, out=IsPos);
+    And(a=jgt, b=IsPos, out=Isjgt);
+    And(a=jeq, b=IsZero, out=Isjeq);
+    Or(a=IsPos, b=IsZero, out=IsPosOrZero);
+    And(a=jge, b=IsPosOrZero, out=Isjge);
+    And(a=jlt, b=IsNeg, out=Isjlt);
+    And(a=jne, b=IsNonZero, out=Isjne);
+    Or(a=IsNeg, b=IsZero, out=IsNegOrZero);
+    And(a=jle, b=IsNegOrZero, out=Isjle);
+    
+    Or(a=Isjgt, b=Isjeq, out=needjmp1);
+    Or(a=Isjge, b=needjmp1, out=needjmp2);
+    Or(a=Isjlt, b=needjmp2, out=needjmp3);
+    Or(a=Isjne, b=needjmp3, out=needjmp4);
+    Or(a=Isjle, b=needjmp4, out=needjmp5);
+    Or(a=jmp, b=needjmp5, out=needjmp6);
+    And(a=needjmp6, b=Cinstruction, out=needjmp);
+
+    // update PC
+    // check if increase, jump or reset PC
+    PC(in=Aregister, load=needjmp, inc=true, reset=reset, out=outpc);
+    Mov15(in=outpc, out=pc);
+}
